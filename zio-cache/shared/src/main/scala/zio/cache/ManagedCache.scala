@@ -73,8 +73,19 @@ object ManagedCache {
     capacity: Int,
     timeToLive: Duration,
     lookup: ManagedLookup[Key, Env, Error, Value]
-  ): UManaged[ManagedCache[Key, Env, Error, Value]] =
+  ): URManaged[Env, ManagedCache[Key, Any, Error, Value]] =
     makeWith(capacity, lookup)(_ => timeToLive)
+
+  /**
+   * Constructs a new cache with the specified capacity, time to live, and
+   * lookup function.
+   */
+  def makeDynamicEnv[Key, Env, Error, Value](
+    capacity: Int,
+    timeToLive: Duration,
+    lookup: ManagedLookup[Key, Env, Error, Value]
+  ): UManaged[ManagedCache[Key, Env, Error, Value]] =
+    makeWithDynamicEnv(capacity, lookup)(_ => timeToLive)
 
   /**
    * Constructs a new cache with the specified capacity, time to live, and
@@ -82,6 +93,30 @@ object ManagedCache {
    * returned by the lookup function.
    */
   def makeWith[Key, Env, Error, Value](
+    capacity: Int,
+    managedLookup: ManagedLookup[Key, Env, Error, Value]
+  )(timeToLive: Exit[Error, Value] => Duration): URManaged[Env, ManagedCache[Key, Any, Error, Value]] =
+    ZManaged.environment[Env].flatMap { env =>
+      makeWith(capacity, managedLookup, Clock.systemUTC())(timeToLive).map { cache =>
+        new ManagedCache[Key, Any, Error, Value] {
+          override def cacheStats: UIO[CacheStats]                   = cache.cacheStats
+          override def contains(key: Key): UIO[Boolean]              = cache.contains(key)
+          override def entryStats(key: Key): UIO[Option[EntryStats]] = cache.entryStats(key)
+          override def get(key: Key): ZManaged[Any, Error, Value]    = cache.get(key).provide(env)
+          override def refresh(key: Key): ZIO[Any, Error, Unit]      = cache.refresh(key).provide(env)
+          override def invalidate(key: Key): UIO[Unit]               = cache.invalidate(key)
+          override def invalidateAll: UIO[Unit]                      = cache.invalidateAll
+          override def size: UIO[Int]                                = cache.size
+        }
+      }
+    }
+
+  /**
+   * Constructs a new cache with the specified capacity, time to live, and
+   * lookup function, where the time to live can depend on the `Exit` value
+   * returned by the lookup function.
+   */
+  def makeWithDynamicEnv[Key, Env, Error, Value](
     capacity: Int,
     managedLookup: ManagedLookup[Key, Env, Error, Value]
   )(timeToLive: Exit[Error, Value] => Duration): UManaged[ManagedCache[Key, Env, Error, Value]] =
